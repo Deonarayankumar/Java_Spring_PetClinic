@@ -1,0 +1,112 @@
+# Starter pipeline
+# Start with a minimal pipeline that you can customize to build and deploy your code.
+# Add steps that build, run tests, deploy, and more:
+# https://aka.ms/yaml
+
+trigger:
+- 
+
+pool:
+  vmImage: ubuntu-latest
+
+stages:
+  - stage: 'BuildArtfiact'
+    displayName: BuildAnalyseUpload
+    jobs:
+      - job: 'Bulid'
+        displayName: Build using Maven
+        steps:
+          - task: SonarQubePrepare@6
+            displayName: Prepare Analysis Configuration
+            inputs:
+              SonarQube: 'sonarqubeServiceConn'
+              scannerMode: 'Other'
+          
+          - task: Maven@4
+            displayName: Build
+            inputs:
+              mavenPomFile: 'pom.xml'
+              publishJUnitResults: false
+              javaHomeOption: 'JDKVersion'
+              mavenVersionOption: 'Default'
+              mavenAuthenticateFeed: false
+              effectivePomSkip: false
+              sonarQubeRunAnalysis: true
+              sqMavenPluginVersionChoice: 'latest'
+          
+          - task: SonarQubePublish@6
+            displayName: Publish Report
+            inputs:
+              pollingTimeoutSec: '300'
+          
+          - task: CopyFiles@2
+            displayName: Copy Files
+            inputs:
+              Contents: '**/target/*.jar'
+              TargetFolder: '$(Build.ArtifactStagingDirectory)'
+
+          - task: PublishBuildArtifacts@1
+            displayName: Publish Artifact
+            inputs:
+              PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+              ArtifactName: 'drop'
+              publishLocation: 'Container'
+
+  - stage: 'JFrog'
+    displayName: Upload to JFrog
+    jobs:
+      - job: 'Upload'
+        displayName: Upload Artifact to JFrog
+        steps:
+          - task: DownloadPipelineArtifact@2
+            inputs:
+              buildType: 'current'
+              artifactName: 'drop'
+              targetPath: '$(Pipeline.Workspace)'
+      
+          - task: JFrogGenericArtifacts@1
+            inputs:
+              command: 'Upload'
+              connection: 'JFrogServiceConn'
+              specSource: 'taskConfiguration'
+              fileSpec: |
+                {
+                  "files": [
+                    {
+                      "pattern": "$(Pipeline.Workspace)/*.jar",
+                      "target": "us1a-PetClinic-repo"
+                    }
+                  ]
+                }
+              collectBuildInfo: true
+              buildName: '$(Build.DefinitionName)'
+              buildNumber: '$(Build.BuildNumber)'
+              projectKey: 'us1a'
+              failNoOp: true
+          
+          - task: JFrogPublishBuildInfo@1
+            inputs:
+              artifactoryConnection: 'JFrogServiceConn'
+              buildName: '$(Build.DefinitionName)'
+              buildNumber: '$(Build.BuildNumber)'
+              projectKey: 'us1a'
+  
+  - stage: 'Deploy'
+    displayName: Deployment
+    jobs:
+      - job: Deploy
+        displayName: Webapp Deployment
+        steps:
+          - task: JfrogCliV2@1
+            inputs:
+              jfrogPlatformConnection: 'JfrogCLI-conn'
+              command: 'jf rt dl us1a-PetClinic-repo/*.jar --url= "https://devn.jfrog.io/artifactory/us1a-PetClinic-repo"'
+          
+          - task: AzureRmWebAppDeployment@4
+            inputs:
+              ConnectionType: 'AzureRM'
+              azureSubscription: 'AzureServiceConn'
+              appType: 'webAppLinux'
+              WebAppName: 'PetClinicGradle'
+              packageForLinux: '$(System.DefaultWorkingDirectory)/**/*.zip'
+              RuntimeStack: 'JAVA|17-java17'
